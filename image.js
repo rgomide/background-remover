@@ -13,6 +13,7 @@ const RMBG_MODEL = 'briaai/RMBG-2.0';
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif']);
 const RMBG_DTYPE = process.env.RMBG_DTYPE ?? 'fp32';
 const RMBG_MAX_SIDE = Number.parseInt(process.env.RMBG_MAX_SIDE ?? '0', 10);
+const OUTPUT_DIR = path.resolve('out');
 
 function suppressOnnxShapeReuseWarnings() {
   const originalWrite = process.stderr.write.bind(process.stderr);
@@ -108,9 +109,9 @@ function getUniqueOutputPath(source, executionTimeMs) {
   const baseName = `${sourceName}-execution_time_${executionTimeMs}ms`;
 
   let counter = 1;
-  let candidate = `${baseName}_rmbg_no_bg.png`;
+  let candidate = path.join(OUTPUT_DIR, `${baseName}_rmbg_no_bg.png`);
   while (fs.existsSync(candidate)) {
-    candidate = `${baseName}_rmbg_no_bg_${counter}.png`;
+    candidate = path.join(OUTPUT_DIR, `${baseName}_rmbg_no_bg_${counter}.png`);
     counter += 1;
   }
   return candidate;
@@ -148,6 +149,7 @@ async function processImage() {
 
   try {
     const processStart = performance.now();
+    await fs.promises.mkdir(OUTPUT_DIR, { recursive: true });
     console.log(`--- Initializing model (${RMBG_MODEL}, dtype=${RMBG_DTYPE}) ---`);
     const config = await getConfigForModel(RMBG_MODEL);
     const pipelineOptions = { dtype: RMBG_DTYPE };

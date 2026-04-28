@@ -24,6 +24,7 @@ coverage/
 .cache/
 .tmp/
 tmp/
+out/
 *.pid
 *.seed
 *.pid.lock

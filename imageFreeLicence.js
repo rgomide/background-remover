@@ -9,6 +9,7 @@ env.allowLocalModels = false;
 // and offers solid performance for productivity use cases.
 const BACKGROUND_REMOVAL_MODEL = 'Xenova/modnet';
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif']);
+const OUTPUT_DIR = path.resolve('out');
 
 function suppressOnnxShapeReuseWarnings() {
   const originalWrite = process.stderr.write.bind(process.stderr);
@@ -88,9 +89,9 @@ function getUniqueOutputPath(source, executionTimeMs) {
   const baseName = `${sourceName}-execution_time_${executionTimeMs}ms`;
 
   let counter = 1;
-  let candidate = `${baseName}_modnet_no_bg.png`;
+  let candidate = path.join(OUTPUT_DIR, `${baseName}_modnet_no_bg.png`);
   while (fs.existsSync(candidate)) {
-    candidate = `${baseName}_modnet_no_bg_${counter}.png`;
+    candidate = path.join(OUTPUT_DIR, `${baseName}_modnet_no_bg_${counter}.png`);
     counter += 1;
   }
   return candidate;
@@ -109,6 +110,7 @@ async function processImage() {
 
   try {
     const processStart = performance.now();
+    await fs.promises.mkdir(OUTPUT_DIR, { recursive: true });
     console.log("--- Initializing model (Xenova/modnet, Apache 2.0) ---");
     const segmenter = await pipeline('background-removal', BACKGROUND_REMOVAL_MODEL, { dtype: 'fp32' });
 
