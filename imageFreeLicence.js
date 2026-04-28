@@ -1,5 +1,6 @@
 import { pipeline, RawImage, env } from '@huggingface/transformers';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 // Disable local model lookup if the model is not downloaded yet.
@@ -10,6 +11,7 @@ env.allowLocalModels = false;
 const BACKGROUND_REMOVAL_MODEL = 'Xenova/modnet';
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif']);
 const OUTPUT_DIR = path.resolve('out');
+const PROCESS_PRIORITY = Number.parseInt(process.env.PROCESS_PRIORITY ?? '-10', 10);
 
 function suppressOnnxShapeReuseWarnings() {
   const originalWrite = process.stderr.write.bind(process.stderr);
@@ -21,6 +23,19 @@ function suppressOnnxShapeReuseWarnings() {
     }
     return originalWrite(chunk, encoding, callback);
   };
+}
+
+function setHighProcessPriority() {
+  if (!Number.isInteger(PROCESS_PRIORITY)) {
+    return;
+  }
+
+  try {
+    os.setPriority(PROCESS_PRIORITY);
+    console.log(`Process priority set to ${PROCESS_PRIORITY}`);
+  } catch (error) {
+    console.warn(`Could not set process priority to ${PROCESS_PRIORITY}: ${error.message}`);
+  }
 }
 
 function isHttpUrl(value) {
@@ -99,6 +114,7 @@ function getUniqueOutputPath(source, executionTimeMs) {
 
 async function processImage() {
   suppressOnnxShapeReuseWarnings();
+  setHighProcessPriority();
 
   const source = process.argv[2];
 

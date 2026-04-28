@@ -66,6 +66,7 @@ You can speed it up with:
 
 - `RMBG_DTYPE`: numeric precision (`fp32` default; try `fp16` or `q8` if supported on your setup)
 - `RMBG_MAX_SIDE`: resizes input before inference (e.g. `1280`) for faster processing
+- `PROCESS_PRIORITY`: sets process priority (-20 is the highest priority)
 
 Examples:
 
@@ -73,4 +74,5 @@ Examples:
 RMBG_DTYPE=q8 npm run image -- "./photos"
 RMBG_MAX_SIDE=1280 npm run image -- "./photos"
 RMBG_DTYPE=q8 RMBG_MAX_SIDE=1280 npm run image -- "./photos"
+RMBG_DTYPE=q8 RMBG_MAX_SIDE=1280 PROCESS_PRIORITY=-20 npm run image -- "./photos"
 ```
