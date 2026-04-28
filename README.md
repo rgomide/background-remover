@@ -22,14 +22,27 @@ npm install
 
 ## How to run
 
-Both scripts expect an image URL as argument:
+Both scripts accept one `<source>` argument, where source can be:
+
+- A local image file path
+- A local folder path (converts all supported images recursively)
+- An image URL (`http`/`https`)
+
+Examples:
 
 ```bash
+npm run image -- "./photos/avatar.jpg"
+npm run image -- "./photos"
 npm run image -- "https://example.com/your-image.jpg"
+
+npm run imageFreeLicence -- "./photos/avatar.jpg"
+npm run imageFreeLicence -- "./photos"
 npm run imageFreeLicence -- "https://example.com/your-image.jpg"
 ```
 
-Each execution saves output as `resultado_<n>.png` in the project root.
+Supported extensions: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.gif`, `.tiff`, `.tif`.
+
+Each processed input is saved in the project root as `<original_name>_no_bg*.png`.
 
 ## Hugging Face token (optional/required depending on model)
 
@@ -44,3 +57,20 @@ HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
 
 For `briaai/RMBG-2.0`, you may also need to accept the model license on:
 <https://huggingface.co/briaai/RMBG-2.0>
+
+## Speed up `image.js`
+
+`image.js` (`briaai/RMBG-2.0`) is higher quality and usually slower than `imageFreeLicence.js` (`Xenova/modnet`).
+
+You can speed it up with:
+
+- `RMBG_DTYPE`: numeric precision (`fp32` default; try `fp16` or `q8` if supported on your setup)
+- `RMBG_MAX_SIDE`: resizes input before inference (e.g. `1280`) for faster processing
+
+Examples:
+
+```bash
+RMBG_DTYPE=q8 npm run image -- "./photos"
+RMBG_MAX_SIDE=1280 npm run image -- "./photos"
+RMBG_DTYPE=q8 RMBG_MAX_SIDE=1280 npm run image -- "./photos"
+```

@@ -1,5 +1,6 @@
 import { pipeline, RawImage, env } from '@huggingface/transformers';
 import fs from 'fs';
+import path from 'path';
 
 // Disable local model lookup if the model is not downloaded yet.
 env.allowLocalModels = false;
@@ -9,6 +10,21 @@ env.allowLocalModels = false;
 // Then run: HF_TOKEN=hf_xxxxxxxx node image.js <URL>
 
 const RMBG_MODEL = 'briaai/RMBG-2.0';
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif']);
+const RMBG_DTYPE = process.env.RMBG_DTYPE ?? 'fp32';
+const RMBG_MAX_SIDE = Number.parseInt(process.env.RMBG_MAX_SIDE ?? '0', 10);
+
+function suppressOnnxShapeReuseWarnings() {
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, encoding, callback) => {
+    const text = typeof chunk === 'string' ? chunk : chunk?.toString?.() ?? '';
+    if (text.includes('AllocateMLValueTensorPreAllocateBuffer') && text.includes('Shape mismatch attempting to re-use buffer')) {
+      if (typeof callback === 'function') callback();
+      return true;
+    }
+    return originalWrite(chunk, encoding, callback);
+  };
+}
 
 /** For briaai/RMBG-2.0, HF config.json may ship with model_type: null. */
 /** The library requires model_type, so we patch it before loading. */
@@ -26,34 +42,139 @@ async function getConfigForModel(modelId) {
   return config;
 }
 
-async function processImage() {
-  const imageUrl = process.argv[2];
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
-  if (!imageUrl) {
-    console.error("Usage: node image.js <URL>");
+async function collectImageFilesFromDirectory(directoryPath) {
+  const entries = await fs.promises.readdir(directoryPath, { withFileTypes: true });
+  const collected = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(directoryPath, entry.name);
+    if (entry.isDirectory()) {
+      collected.push(...await collectImageFilesFromDirectory(fullPath));
+      continue;
+    }
+
+    if (entry.isFile() && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+      collected.push(fullPath);
+    }
+  }
+
+  return collected;
+}
+
+async function resolveSources(input) {
+  if (isHttpUrl(input)) {
+    return [input];
+  }
+
+  const resolvedPath = path.resolve(input);
+  let stats;
+  try {
+    stats = await fs.promises.stat(resolvedPath);
+  } catch {
+    throw new Error(`Source does not exist: ${input}`);
+  }
+
+  if (stats.isFile()) {
+    if (!IMAGE_EXTENSIONS.has(path.extname(resolvedPath).toLowerCase())) {
+      throw new Error(`Unsupported file extension: ${path.extname(resolvedPath) || '(none)'}`);
+    }
+    return [resolvedPath];
+  }
+
+  if (stats.isDirectory()) {
+    const files = await collectImageFilesFromDirectory(resolvedPath);
+    if (files.length === 0) {
+      throw new Error(`No supported image files found in folder: ${resolvedPath}`);
+    }
+    return files;
+  }
+
+  throw new Error(`Unsupported source type: ${input}`);
+}
+
+function getUniqueOutputPath(source, executionTimeMs) {
+  const sourceName = isHttpUrl(source)
+    ? 'resultado_url'
+    : path.parse(source).name.replace(/[^a-zA-Z0-9-_]/g, '_');
+  const baseName = `${sourceName}-execution_time_${executionTimeMs}ms`;
+
+  let counter = 1;
+  let candidate = `${baseName}_rmbg_no_bg.png`;
+  while (fs.existsSync(candidate)) {
+    candidate = `${baseName}_rmbg_no_bg_${counter}.png`;
+    counter += 1;
+  }
+  return candidate;
+}
+
+async function maybeResizeForSpeed(image) {
+  if (!Number.isInteger(RMBG_MAX_SIDE) || RMBG_MAX_SIDE <= 0) {
+    return image;
+  }
+
+  const [width, height] = image.size;
+  const currentMaxSide = Math.max(width, height);
+  if (currentMaxSide <= RMBG_MAX_SIDE) {
+    return image;
+  }
+
+  const scale = RMBG_MAX_SIDE / currentMaxSide;
+  const resizedWidth = Math.max(1, Math.round(width * scale));
+  const resizedHeight = Math.max(1, Math.round(height * scale));
+
+  console.log(`Resizing ${width}x${height} -> ${resizedWidth}x${resizedHeight} for faster inference`);
+  return image.resize(resizedWidth, resizedHeight);
+}
+
+async function processImage() {
+  suppressOnnxShapeReuseWarnings();
+
+  const source = process.argv[2];
+
+  if (!source) {
+    console.error("Usage: node image.js <source>");
+    console.error("source can be: image file path, folder path, or image URL");
     process.exit(1);
   }
 
   try {
-    console.log("--- Initializing model ---");
+    const processStart = performance.now();
+    console.log(`--- Initializing model (${RMBG_MODEL}, dtype=${RMBG_DTYPE}) ---`);
     const config = await getConfigForModel(RMBG_MODEL);
-    const pipelineOptions = config ? { config } : {};
+    const pipelineOptions = { dtype: RMBG_DTYPE };
+    if (config) pipelineOptions.config = config;
     const segmenter = await pipeline('background-removal', RMBG_MODEL, pipelineOptions);
 
-    console.log("--- Processing image ---");
-    const image = await RawImage.fromURL(imageUrl);
+    const sources = await resolveSources(source);
+    console.log(`--- Processing ${sources.length} image(s) ---`);
 
-    // background-removal returns a RawImage array (transparent background result)
-    const results = await segmenter(image);
-    const resultImage = Array.isArray(results) ? results[0] : results;
+    for (const [index, imageSource] of sources.entries()) {
+      const imageStart = performance.now();
+      console.log(`[${index + 1}/${sources.length}] ${imageSource}`);
+      const image = await RawImage.fromURL(imageSource);
+      const inputImage = await maybeResizeForSpeed(image);
 
-    let counter = 1;
-    while (fs.existsSync(`resultado_${counter}.png`)) { counter++; }
-    const fileName = `resultado_${counter}.png`;
+      // background-removal returns a RawImage array (transparent background result)
+      const results = await segmenter(inputImage);
+      const resultImage = Array.isArray(results) ? results[0] : results;
 
-    await resultImage.save(fileName);
+      const imageElapsedMs = Math.round(performance.now() - imageStart);
+      const outputPath = getUniqueOutputPath(imageSource, imageElapsedMs);
+      await resultImage.save(outputPath);
+      console.log(`Saved: ${outputPath} (${imageElapsedMs} ms)`);
+    }
 
-    console.log(`--- Done! Saved as: ${fileName} ---`);
+    const totalElapsedMs = Math.round(performance.now() - processStart);
+    console.log(`--- Done in ${totalElapsedMs} ms ---`);
 
   } catch (error) {
     console.error("\nERROR:");
@@ -62,7 +183,7 @@ async function processImage() {
     if (error.message.includes('Unauthorized')) {
       console.log("\nTIP: Hugging Face may require authentication to download the model.");
       console.log("1. Create a Read token at https://huggingface.co/settings/tokens.");
-      console.log("2. Run: HF_TOKEN=your_token node image.js <URL>");
+      console.log("2. Run: HF_TOKEN=your_token node image.js <source>");
     }
     if (error.message.includes('Forbidden')) {
       console.log("\nTIP: RMBG-2.0 is gated, so you must accept the license on Hugging Face.");
