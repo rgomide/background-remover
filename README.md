@@ -1,4 +1,4 @@
-# transformers-with-bert
+# RMBG-2.0 and Modnet for background removal
 
 Simple Node.js scripts for background removal using `@huggingface/transformers`.
 
