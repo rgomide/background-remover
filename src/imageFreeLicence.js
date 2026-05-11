@@ -1,15 +1,18 @@
-import { pipeline, RawImage, env } from '@huggingface/transformers';
+import { RawImage, env } from '@huggingface/transformers';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseEnvIntNonNegative, parseProcessPriorityWithDefault } from './lib/env.js';
+import { inferBackgroundRemovalRawImage } from './lib/background-removal-shared.js';
+import { parseEnvIntNonNegative, parseEnvStringOr, parseProcessPriorityWithDefault } from './lib/env.js';
 import { maybeResizeForSpeed } from './lib/image-resize.js';
 import { suppressOnnxShapeReuseWarnings } from './lib/onnx-warnings.js';
 import { trySetProcessPriority } from './lib/process-priority.js';
+import { backgroundRemovalOutputFileTag } from './lib/u2net-infer.js';
 import { getUniqueOutputPath, resolveSources } from './lib/cli-image-sources.js';
 
 env.allowLocalModels = false;
 
-const BACKGROUND_REMOVAL_MODEL = 'Xenova/modnet';
+const RMBG_MODEL = parseEnvStringOr('RMBG_MODEL', 'Xenova/modnet');
+const RMBG_DTYPE = parseEnvStringOr('RMBG_DTYPE', 'fp32');
 const RMBG_MAX_SIDE = parseEnvIntNonNegative('RMBG_MAX_SIDE', 0);
 const OUTPUT_DIR = path.resolve(process.cwd(), 'out');
 const PROCESS_PRIORITY = parseProcessPriorityWithDefault(-10);
@@ -29,8 +32,7 @@ async function processImage() {
   try {
     const processStart = performance.now();
     await fs.promises.mkdir(OUTPUT_DIR, { recursive: true });
-    console.log('--- Initializing model (Xenova/modnet, Apache 2.0) ---');
-    const segmenter = await pipeline('background-removal', BACKGROUND_REMOVAL_MODEL, { dtype: 'fp32' });
+    console.log(`--- Model ${RMBG_MODEL} (dtype=${RMBG_DTYPE}) — first image may download weights ---`);
 
     const sources = await resolveSources(source);
     console.log(`--- Processing ${sources.length} image(s) ---`);
@@ -41,12 +43,16 @@ async function processImage() {
       const image = await RawImage.fromURL(imageSource);
       const inputImage = await maybeResizeForSpeed(image, RMBG_MAX_SIDE);
 
-      const results = await segmenter(inputImage);
-      const resultImage = Array.isArray(results) ? results[0] : results;
+      const resultImage = await inferBackgroundRemovalRawImage(inputImage, {
+        modelId: RMBG_MODEL,
+        dtype: RMBG_DTYPE,
+        session_options: {},
+        userAgent: 'transformers.js-custom',
+      });
 
       const imageElapsedMs = Math.round(performance.now() - imageStart);
       const outputPath = getUniqueOutputPath(imageSource, imageElapsedMs, OUTPUT_DIR, {
-        fileTag: 'modnet_no_bg',
+        fileTag: backgroundRemovalOutputFileTag(RMBG_MODEL),
       });
       await resultImage.save(outputPath);
       console.log(`Saved: ${outputPath} (${imageElapsedMs} ms)`);

@@ -18,9 +18,9 @@ npm install
 ## Scripts
 
 - `npm run image`  
-  Runs [`src/image.js`](src/image.js) with `briaai/RMBG-2.0` (higher quality, gated on Hugging Face).
+  Runs [`src/image.js`](src/image.js). Default **`RMBG_MODEL`** is `briaai/RMBG-2.0` (gated); override in `.env` or the shell.
 - `npm run imageFreeLicence`  
-  Runs [`src/imageFreeLicence.js`](src/imageFreeLicence.js) with `Xenova/modnet` (Apache 2.0, commercial use allowed).
+  Runs [`src/imageFreeLicence.js`](src/imageFreeLicence.js). Default **`RMBG_MODEL`** is `Xenova/modnet` (Apache 2.0); override for other supported models (for example U-2-Net below).
 - `npm run server` or `npm start`  
   Starts [`src/server.js`](src/server.js), an Express HTTP API that accepts a remote image URL and returns a PNG with the background removed.
 - `npm run sentiment`  
@@ -73,7 +73,7 @@ curl -o no-bg.png "http://localhost:3000/remove?url=https://t4.ftcdn.net/jpg/02/
 |----------|---------|---------|
 | `PORT` | `3000` | HTTP listen port (invalid or empty `PORT=` falls back to 3000) |
 | `HOST` | `0.0.0.0` | Bind address (`127.0.0.1` to accept local connections only) |
-| `RMBG_MODEL` | `Xenova/modnet` | Hugging Face model id for `background-removal` |
+| `RMBG_MODEL` | `Xenova/modnet` (server) / see CLI defaults | Model id: standard **`background-removal`** models, or **`BritishWerewolf/U-2-Net`** (custom path; Apache 2.0, see below) |
 | `RMBG_DTYPE` | `fp32` | Pipeline dtype (e.g. `fp16`, `q8` when supported) |
 | `RMBG_MAX_SIDE` | `0` | If set to a positive integer, downscales the longest image side before inference |
 | `IMAGE_FETCH_TIMEOUT_MS` | `30000` | Timeout for downloading the input image from `url` |
@@ -98,6 +98,13 @@ Background-removal models are heavy in RAM. **`briaai/RMBG-2.0` in `fp32` often 
    RMBG_DTYPE=fp32
    ```
 
+   Another Apache 2.0 option that is often lighter than RMBG-2.0:
+
+   ```env
+   RMBG_MODEL=BritishWerewolf/U-2-Net
+   RMBG_DTYPE=fp32
+   ```
+
 2. **Cap input resolution** so activations stay smaller (try `640`–`1024` first):
 
    ```env
@@ -113,6 +120,18 @@ Background-removal models are heavy in RAM. **`briaai/RMBG-2.0` in `fp32` often 
    ```
 
    Optional overrides: `ORT_INTRA_OP_THREADS`, `ORT_INTER_OP_THREADS` (defaults `1` in low profile).
+
+### U-2-Net ([BritishWerewolf/U-2-Net](https://huggingface.co/BritishWerewolf/U-2-Net))
+
+This repo supports the Apache 2.0 ONNX build **BritishWerewolf/U-2-Net** via **`RMBG_MODEL=BritishWerewolf/U-2-Net`**. The Hub repo only publishes **`onnx/model.onnx` (fp32)** — there is no `model_quantized.onnx`, so **`RMBG_DTYPE=q8` (and other dtypes) are ignored** for this model with a console warning; loading always uses fp32.
+
+Transformers.js does not register `U2NetImageProcessor` yet. **By default, preprocessing matches [rembg’s `BaseSession.normalize`](https://github.com/danielgatis/rembg/blob/main/rembg/sessions/base.py)** (RGB → exact **320×320 stretch** with LANCZOS, divide by **global max**, then ImageNet mean/std). That is what most public `u2net.onnx` builds expect; the [official U-2-Net paper repo](https://github.com/xuebinqin/U-2-Net) also recommends **320×320** for the pretrained SOD weights. Letterboxing (Hub [`preprocessor_config.json`](https://huggingface.co/BritishWerewolf/U-2-Net/blob/main/preprocessor_config.json)) misaligns the saliency map when the mask is resized back to the original image, which looks like a bad cutout or a “cropped” foreground. To use Hub-style letterbox instead, set **`U2NET_PREPROCESS=hf`**.
+
+Inference uses **`AutoModel`** and the composite ONNX output described in the model `config.json`. The library would otherwise print `Unknown model class "u2net"` — that path is normal and is filtered in this project in favor of a short explanatory log line.
+
+Mask post-processing follows the same idea as [rembg’s `U2netSession`](https://github.com/danielgatis/rembg/blob/main/rembg/sessions/u2net.py): optional sigmoid on logits, then **per-image min–max normalization** so the saliency map uses the full 0–1 range before converting to 8-bit alpha (otherwise the mask often stays mid-gray and the cutout looks blurred or washed out). Set **`U2NET_SKIP_MASK_MINMAX=1`** only if you need the raw ONNX activations as alpha.
+
+Other U-2-Net repos on the Hub are not wired unless added to [`U2NET_SUPPORTED_MODEL_IDS`](src/lib/u2net-infer.js).
 
 ## How to run
 
