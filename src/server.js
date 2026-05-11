@@ -11,6 +11,10 @@ import { maybeResizeForSpeed } from './lib/image-resize.js';
 import { suppressOnnxShapeReuseWarnings } from './lib/onnx-warnings.js';
 import { trySetProcessPriority } from './lib/process-priority.js';
 import { assertRemoteImageUrlAllowed } from './lib/ssrf-url.js';
+import {
+  getOnnxSessionOptionsForPipeline,
+  getTransformersMemoryProfile,
+} from './lib/transformers-memory-profile.js';
 
 const PORT = parseEnvPort('PORT', 3000);
 const HOST = (() => {
@@ -71,10 +75,17 @@ let segmenterPromise = null;
 async function getSegmenter() {
   if (!segmenterPromise) {
     segmenterPromise = (async () => {
+      const memProfile = getTransformersMemoryProfile();
       console.log(`--- Initializing background-removal pipeline (${RMBG_MODEL}, dtype=${RMBG_DTYPE}) ---`);
+      if (memProfile === 'low') {
+        console.log(
+          '--- Memory profile: low (sequential ONNX, single-threaded ops; set TRANSFORMERS_MEMORY_PROFILE=high to disable) ---',
+        );
+      }
       const { pipeline } = await getTransformers();
       const config = await getConfigForModel(RMBG_MODEL, { userAgent: 'background-remover-server' });
-      const pipelineOptions = { dtype: RMBG_DTYPE };
+      const session_options = getOnnxSessionOptionsForPipeline();
+      const pipelineOptions = { dtype: RMBG_DTYPE, session_options };
       if (config) pipelineOptions.config = config;
       return pipeline('background-removal', RMBG_MODEL, pipelineOptions);
     })();

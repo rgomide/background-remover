@@ -80,8 +80,39 @@ curl -o no-bg.png "http://localhost:3000/remove?url=https://t4.ftcdn.net/jpg/02/
 | `HF_TOKEN` / `HF_ACCESS_TOKEN` | — | Hugging Face token (needed for gated models and some downloads) |
 | `PROCESS_PRIORITY` | unset | If set to an integer (e.g. `-10`), calls `os.setPriority` (often needs elevated privileges) |
 | `RMBG_ALLOW_PRIVATE_URLS` | off | Set to `1` or `true` to allow fetching from private / loopback hosts (unsafe if the API is exposed beyond localhost) |
+| `TRANSFORMERS_MEMORY_PROFILE` | auto | `auto`: use low-memory ONNX settings when `RENDER=true` or `LOW_MEMORY=1`. `low` / `high` force either mode. |
+| `LOW_MEMORY` | off | Set to `1` or `true` to enable the same low-memory ONNX profile as Render without relying on `RENDER`. |
+| `ORT_INTRA_OP_THREADS` | `1` | Used only in low-memory profile; ONNX intra-op thread count (≥ 1). |
+| `ORT_INTER_OP_THREADS` | `1` | Used only in low-memory profile; ONNX inter-op thread count (≥ 1). |
 
 **Security:** the server fetches arbitrary `http`/`https` URLs you pass in. By default it blocks common SSRF targets (for example `localhost`, link-local addresses, and hostnames that resolve to private IPs). Only enable `RMBG_ALLOW_PRIVATE_URLS` in controlled environments.
+
+### Render.com and other ~512MB RAM hosts
+
+Background-removal models are heavy in RAM. **`briaai/RMBG-2.0` in `fp32` often exceeds 512MB** during load or inference, so the process is killed.
+
+1. **Use a smaller model** (strongly recommended on the free tier):
+
+   ```env
+   RMBG_MODEL=Xenova/modnet
+   RMBG_DTYPE=fp32
+   ```
+
+2. **Cap input resolution** so activations stay smaller (try `640`–`1024` first):
+
+   ```env
+   RMBG_MAX_SIDE=768
+   ```
+
+3. **If the model offers a quantized dtype on your setup**, try `RMBG_DTYPE=q8` (only when the Hub ONNX build supports it).
+
+4. **Low-memory ONNX profile** — when **`RENDER=true`** (Render sets this) or **`LOW_MEMORY=1`**, the server passes conservative `session_options` into Transformers.js (`sequential` execution, single-threaded intra/inter ops, CPU memory arena/pattern disabled). To turn that off on a larger instance while still on Render, set:
+
+   ```env
+   TRANSFORMERS_MEMORY_PROFILE=high
+   ```
+
+   Optional overrides: `ORT_INTRA_OP_THREADS`, `ORT_INTER_OP_THREADS` (defaults `1` in low profile).
 
 ## How to run
 
